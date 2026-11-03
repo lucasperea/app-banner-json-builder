@@ -1,0 +1,316 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>App Banner JSON Builder</title>
+    <style>
+      :root {
+        --bg: #0f172a;
+        --surface: #1e293b;
+        --card: #273548;
+        --primary: #3b82f6;
+        --primary-hover: #2563eb;
+        --text: #f8fafc;
+        --muted: #94a3b8;
+        --border: #334155;
+        --ok: #10b981;
+        --warn: #f59e0b;
+      }
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      body {
+        font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+        background: var(--bg);
+        color: var(--text);
+        padding: 2rem;
+        line-height: 1.4;
+      }
+      h1 { font-size: 1.8rem; margin-bottom: 0.25rem; }
+      .subtitle { color: var(--muted); margin-bottom: 1.5rem; }
+      .container { max-width: 1400px; margin: 0 auto; }
+      textarea, input, select {
+        width: 100%;
+        background: var(--bg);
+        color: var(--text);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 0.5rem 0.6rem;
+        font: inherit;
+      }
+      textarea { min-height: 220px; font-family: Consolas, monospace; font-size: 0.85rem; resize: vertical; }
+      label { display: block; font-size: 0.75rem; color: var(--muted); margin-bottom: 0.2rem; text-transform: uppercase; letter-spacing: 0.04em; }
+      button {
+        background: var(--primary);
+        color: #fff;
+        border: 0;
+        border-radius: 6px;
+        padding: 0.55rem 1rem;
+        font: inherit;
+        cursor: pointer;
+      }
+      button:hover { background: var(--primary-hover); }
+      button.secondary { background: transparent; border: 1px solid var(--border); color: var(--text); }
+      button.secondary:hover { background: var(--surface); }
+      .bar { display: flex; gap: 0.5rem; margin: 0.75rem 0 1.5rem; flex-wrap: wrap; align-items: center; }
+      .status { color: var(--muted); font-size: 0.85rem; margin-left: auto; }
+      #cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(560px, 1fr)); gap: 1rem; }
+      .card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 1rem; }
+      .card.skipped { opacity: 0.6; }
+      .card-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem; gap: 0.5rem; }
+      .card-head strong { font-size: 0.95rem; }
+      .badge { font-size: 0.7rem; padding: 0.1rem 0.5rem; border-radius: 99px; background: var(--card); color: var(--muted); }
+      .badge.warn { color: var(--warn); }
+      .badge.ok { color: var(--ok); }
+      .body { display: grid; grid-template-columns: 150px 1fr; gap: 1rem; }
+      .preview { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; min-height: 100px; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+      .preview img { width: 100%; display: block; }
+      .preview span { color: var(--muted); font-size: 0.75rem; padding: 0.5rem; text-align: center; }
+      .fields { display: grid; grid-template-columns: 1fr 1fr; gap: 0.6rem; }
+      .fields .full { grid-column: 1 / -1; }
+      pre {
+        grid-column: 1 / -1;
+        background: var(--bg);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 0.6rem;
+        font-size: 0.8rem;
+        overflow: auto;
+        max-height: 260px;
+      }
+      .card-actions { display: flex; gap: 0.5rem; margin-top: 0.75rem; }
+      .card-actions button { padding: 0.35rem 0.8rem; font-size: 0.85rem; }
+      @media (max-width: 640px) {
+        #cards { grid-template-columns: 1fr; }
+        .body { grid-template-columns: 1fr; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h1>App Banner JSON Builder</h1>
+      <p class="subtitle">Paste ticket rows (header copy, asset, ID). Each row with an asset becomes its own banner JSON.</p>
+
+      <label for="ticket">Ticket data</label>
+      <textarea id="ticket" placeholder="1&#9;HEADER COPY&#9;https://cdn.torrid.com/i/torrid/...&#9;Destination_ID"></textarea>
+      <div class="bar">
+        <button id="parse">Parse ticket</button>
+        <button class="secondary" id="copyAll">Copy all JSON</button>
+        <button class="secondary" id="downloadAll">Download all</button>
+        <span class="status" id="status"></span>
+      </div>
+
+      <div id="cards"></div>
+    </div>
+
+    <script>
+      const IMG_WIDTH = 640;
+      const ACTIONS = ["pdp", "plp", "clp", "webView"];
+      const TYPES = ["banner", "video_banner"];
+      const IMG_RE = /https?:\/\/cdn\.torrid\.com\/i\/torrid\/[^\s]+/gi;
+
+      let banners = [];
+
+      const $ = (id) => document.getElementById(id);
+
+      function titleCase(str) {
+        return str
+          .toLowerCase()
+          .replace(/\b[a-z]/g, (c) => c.toUpperCase())
+          .replace(/\s+/g, " ")
+          .trim();
+      }
+
+      // Split ticket text into rows: a row starts at a line beginning with "<number><tab>".
+      function splitRows(text) {
+        const rows = [];
+        let current = null;
+        text.replace(/\r/g, "").split("\n").forEach((line) => {
+          if (/^\d+\t/.test(line)) {
+            current = [line];
+            rows.push(current);
+          } else if (current) {
+            current.push(line);
+          }
+        });
+        return rows.map((lines) => lines.join("\n"));
+      }
+
+      function parseRow(raw) {
+        const num = raw.match(/^(\d+)\t/)[1];
+        const body = raw.replace(/^\d+\t/, "");
+        const header = body.split("\t")[0].split("\n")[0].trim();
+
+        const urls = body.match(IMG_RE) || [];
+        const imageSrc = urls.length ? urls[urls.length - 1].replace(/[.,;]+$/, "") : "";
+
+        // Destination = first token after the last image URL (the ID column).
+        let destination = "";
+        if (imageSrc) {
+          const after = body.slice(body.lastIndexOf(imageSrc) + imageSrc.length);
+          const tok = after.split(/\s+/).filter(Boolean)[0];
+          if (tok && tok.toUpperCase() !== "NONE") destination = tok;
+        }
+
+        const isVideo = /\bvideo\b/i.test(body.replace(IMG_RE, ""));
+        return {
+          row: num,
+          header,
+          type: isVideo ? "video_banner" : "banner",
+          action: "plp",
+          destination,
+          url: "",
+          image_src: imageSrc,
+          PageTitle: header && header.toUpperCase() !== "NONE" ? titleCase(header) : "",
+          imgHeight: "",
+          dimsNote: "",
+          skipped: !imageSrc,
+        };
+      }
+
+      function loadDims(b) {
+        if (!b.image_src) return;
+        b.dimsNote = "measuring…";
+        const img = new Image();
+        img.crossOrigin = "anonymous";
+        img.onload = () => {
+          b.imgHeight = Math.round(img.naturalHeight * (IMG_WIDTH / img.naturalWidth));
+          b.dimsNote = `${img.naturalWidth}×${img.naturalHeight}`;
+          render();
+        };
+        img.onerror = () => {
+          b.dimsNote = "couldn't load asset — enter height";
+          render();
+        };
+        img.src = b.image_src;
+      }
+
+      function toJson(b) {
+        return {
+          type: b.type,
+          banners: [
+            {
+              url: b.url,
+              action: b.action,
+              destination: b.destination,
+              image_src: b.image_src,
+              PageTitle: b.PageTitle,
+            },
+          ],
+          imgHeight: Number(b.imgHeight) || 0,
+          imgWidth: IMG_WIDTH,
+        };
+      }
+
+      function fileName(b) {
+        const slug = (b.PageTitle || b.header || "banner").toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
+        return `banner_${String(b.row).padStart(2, "0")}_${slug}.json`;
+      }
+
+      function esc(s) {
+        return String(s).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+      }
+
+      function opts(list, sel) {
+        return list.map((o) => `<option value="${o}"${o === sel ? " selected" : ""}>${o}</option>`).join("");
+      }
+
+      function render() {
+        const active = document.activeElement;
+        // Don't clobber a field mid-typing; field edits call refreshJson() instead.
+        if (active && active.dataset && active.dataset.i !== undefined && active.tagName === "INPUT") return;
+
+        $("cards").innerHTML = banners
+          .map((b, i) => {
+            const badge = b.skipped
+              ? `<span class="badge warn">no asset – skipped</span>`
+              : `<span class="badge ${b.dimsNote.includes("×") ? "ok" : "warn"}">${esc(b.dimsNote || "")}</span>`;
+            return `
+          <div class="card${b.skipped ? " skipped" : ""}" data-card="${i}">
+            <div class="card-head"><strong>Row ${esc(b.row)} · ${esc(b.header || "—")}</strong>${badge}</div>
+            <div class="body">
+              <div class="preview">${b.image_src ? `<img src="${esc(b.image_src)}" alt="" />` : "<span>No asset</span>"}</div>
+              <div class="fields">
+                <div><label>Type</label><select data-i="${i}" data-k="type">${opts(TYPES, b.type)}</select></div>
+                <div><label>Action</label><select data-i="${i}" data-k="action">${opts(ACTIONS, b.action)}</select></div>
+                <div class="full"><label>Destination</label><input data-i="${i}" data-k="destination" value="${esc(b.destination)}" /></div>
+                <div class="full"><label>Page title (check the image)</label><input data-i="${i}" data-k="PageTitle" value="${esc(b.PageTitle)}" /></div>
+                <div class="full"><label>URL (video / webView)</label><input data-i="${i}" data-k="url" value="${esc(b.url)}" /></div>
+                <div class="full"><label>Image src</label><input data-i="${i}" data-k="image_src" value="${esc(b.image_src)}" /></div>
+                <div><label>imgHeight</label><input type="number" data-i="${i}" data-k="imgHeight" value="${esc(b.imgHeight)}" /></div>
+              </div>
+              <pre data-json="${i}">${esc(JSON.stringify(toJson(b), null, 2))}</pre>
+            </div>
+            <div class="card-actions">
+              <button data-copy="${i}">Copy JSON</button>
+              <button class="secondary" data-dl="${i}">Download</button>
+            </div>
+          </div>`;
+          })
+          .join("");
+        $("status").textContent = banners.length
+          ? `${banners.filter((b) => !b.skipped).length} banners, ${banners.filter((b) => b.skipped).length} skipped`
+          : "";
+      }
+
+      function refreshJson(i) {
+        const pre = document.querySelector(`[data-json="${i}"]`);
+        if (pre) pre.textContent = JSON.stringify(toJson(banners[i]), null, 2);
+      }
+
+      function download(name, text) {
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(new Blob([text], { type: "application/json" }));
+        a.download = name;
+        a.click();
+        URL.revokeObjectURL(a.href);
+      }
+
+      const live = () => banners.filter((b) => !b.skipped);
+
+      $("parse").onclick = () => {
+        banners = splitRows($("ticket").value).map(parseRow);
+        render();
+        banners.forEach(loadDims);
+      };
+
+      $("cards").addEventListener("input", (e) => {
+        const { i, k } = e.target.dataset;
+        if (i === undefined) return;
+        banners[i][k] = e.target.value;
+        if (k === "image_src") {
+          banners[i].skipped = !e.target.value;
+        }
+        refreshJson(i);
+      });
+
+      $("cards").addEventListener("change", (e) => {
+        const { i, k } = e.target.dataset;
+        if (i === undefined) return;
+        if (k === "image_src") {
+          loadDims(banners[i]);
+        }
+        render();
+      });
+
+      $("cards").addEventListener("click", (e) => {
+        const c = e.target.dataset.copy;
+        const d = e.target.dataset.dl;
+        if (c !== undefined) {
+          navigator.clipboard.writeText(JSON.stringify(toJson(banners[c]), null, 2));
+          e.target.textContent = "Copied!";
+          setTimeout(() => (e.target.textContent = "Copy JSON"), 1200);
+        }
+        if (d !== undefined) download(fileName(banners[d]), JSON.stringify(toJson(banners[d]), null, 2));
+      });
+
+      $("copyAll").onclick = () => {
+        navigator.clipboard.writeText(JSON.stringify(live().map(toJson), null, 2));
+        $("status").textContent = "Copied all as a JSON array";
+      };
+
+      $("downloadAll").onclick = () => {
+        live().forEach((b, n) => setTimeout(() => download(fileName(b), JSON.stringify(toJson(b), null, 2)), n * 200));
+      };
+    </script>
+  </body>
+</html>
